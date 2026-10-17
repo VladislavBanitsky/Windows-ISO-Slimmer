@@ -1,0 +1,1 @@
+C:\Users\olgav\source\repos\IsoSlimmer_\IsoSlimmer.csproj;x64

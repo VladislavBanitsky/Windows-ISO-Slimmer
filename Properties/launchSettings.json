@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "IsoSlimmer (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "IsoSlimmer (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
