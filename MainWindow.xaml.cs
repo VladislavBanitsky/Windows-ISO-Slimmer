@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Windows.Graphics;
 using Windows.Graphics; // Для SizeInt32
@@ -20,6 +21,8 @@ namespace IsoSlimmer;
 public sealed partial class MainWindow : Window
 {
     // Внутри класса MainWindow
+    private StringBuilder _fullLog = new StringBuilder();
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct OpenFileName
     {
@@ -95,6 +98,7 @@ public sealed partial class MainWindow : Window
         if (_logWindow == null)
         {
             _logWindow = new LogWindow();
+            _logWindow.AppendLog(_fullLog.ToString());  // Передаем накопленный лог в новое окно
             _logWindow.Closed += (s, args) => _logWindow = null; // Сбрасываем ссылку при закрытии
         }
         _logWindow.Activate();
@@ -105,6 +109,7 @@ public sealed partial class MainWindow : Window
     {
         // Пишем в отладочную консоль Visual Studio
         System.Diagnostics.Debug.WriteLine(message);
+        _fullLog.AppendLine(message); // Копим лог в переменную класса
 
         // Пишем в наше окно, если оно открыто
         _logWindow?.AppendLog(message);
@@ -121,6 +126,9 @@ public sealed partial class MainWindow : Window
 
         // Задаем ширину и высоту (в логических пикселях)
         appWindow.ResizeClient(new SizeInt32(700, 500));
+
+        _logWindow = new LogWindow(); // Создаем сразу, чтобы лог писался
+        _logWindow.Closed += (s, args) => _logWindow = null;
     }
 
     // Вспомогательный метод для вызова диалога
@@ -418,7 +426,6 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
-        // Проверяем наличие загрузочных файлов
         string etfsboot = Path.Combine(workDir, "boot", "etfsboot.com");
         string efisys = Path.Combine(workDir, "efi", "microsoft", "boot", "efisys.bin");
 
@@ -428,7 +435,6 @@ public sealed partial class MainWindow : Window
             return false;
         }
 
-        // Формируем аргументы для создания UEFI+BIOS загрузочного ISO
         string args = $"-m -o -u2 -udfver102 " +
                       $"-bootdata:2#p0,e,b\"{etfsboot}\"#pEF,e,b\"{efisys}\" " +
                       $"\"{workDir}\" \"{outputIsoPath}\"";
@@ -440,13 +446,110 @@ public sealed partial class MainWindow : Window
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            // Добавляем кодировку, чтобы русские буквы не ломались (если есть)
+            StandardOutputEncoding = Encoding.GetEncoding(866),
+            StandardErrorEncoding = Encoding.GetEncoding(866)
         };
 
-        using var proc = Process.Start(psi);
+        using var proc = Process.Start(psi)!;
+
+        // Читаем оба потока. Прогресс обычно идет в stdout.
+        var readOut = ReadOscdimgStreamAsync(proc.StandardOutput, 92, 100);
+        var readErr = ReadOscdimgStreamAsync(proc.StandardError, 92, 100);
+
+        await Task.WhenAll(readOut, readErr);
         await proc.WaitForExitAsync();
 
-        return proc.ExitCode == 0 && File.Exists(outputIsoPath);
+        bool ok = proc.ExitCode == 0 && File.Exists(outputIsoPath);
+
+        if (ok)
+        {
+            var dq = progressBar.DispatcherQueue;
+            dq?.TryEnqueue(() =>
+            {
+                progressBar.Value = 100;
+                lblProgressPercent.Text = "100%";
+                lblStatus.Text = "Сборка ISO завершена (100%)";
+            });
+        }
+        return ok;
+    }
+
+    private static long GetDirectorySize(string dir)
+    {
+        long total = 0;
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            {
+                try { total += new FileInfo(f).Length; } catch { /* пропускаем недоступные */ }
+            }
+        }
+        catch { }
+        return total;
+    }
+
+    private async Task ReadOscdimgStreamAsync(StreamReader reader, int startProgress, int endProgress)
+    {
+        var buffer = new StringBuilder();
+        var chunk = new char[1024];
+
+        while (true)
+        {
+            int n = await reader.ReadAsync(chunk, 0, chunk.Length);
+            if (n == 0) break;
+
+            for (int i = 0; i < n; i++)
+            {
+                char c = chunk[i];
+
+                // oscdimg обновляет строку через \r
+                if (c == '\r' || c == '\n')
+                {
+                    if (buffer.Length > 0)
+                    {
+                        ProcessOscdimgLine(buffer.ToString(), startProgress, endProgress);
+                        buffer.Clear();
+                    }
+                    continue;
+                }
+
+                buffer.Append(c);
+            }
+        }
+
+        if (buffer.Length > 0)
+            ProcessOscdimgLine(buffer.ToString(), startProgress, endProgress);
+    }
+
+    private void ProcessOscdimgLine(string line, int startProgress, int endProgress)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return;
+
+        // Пишем в лог, чтобы видеть в консоли
+        Log(line);
+
+        // Ищем проценты. Строка выглядит как "97% complete" или " 45% complete"
+        var match = System.Text.RegularExpressions.Regex.Match(line, @"(\d+)%\s*complete", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (match.Success && int.TryParse(match.Groups[1].Value, out int percent))
+        {
+            if (percent < 0 || percent > 100) return;
+
+            // Пересчитываем локальные 0-100% oscdimg в общий диапазон (92-100%)
+            int overall = startProgress + (int)(percent / 100.0 * (endProgress - startProgress));
+
+            var dq = progressBar.DispatcherQueue;
+            dq?.TryEnqueue(() =>
+            {
+                if (overall > progressBar.Value)
+                {
+                    progressBar.Value = overall;
+                    lblProgressPercent.Text = $"{overall}%";
+                    lblStatus.Text = $"Сборка ISO (oscdimg, {percent}%)...";
+                }
+            });
+        }
     }
 
     private async Task<bool> ExtractIsoAsync(string isoPath, string workDir)
@@ -469,15 +572,20 @@ public sealed partial class MainWindow : Window
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.GetEncoding(866), // Обязательно!
+            StandardErrorEncoding = Encoding.GetEncoding(866)   // Обязательно!
         };
 
         using var proc = Process.Start(psi);
-        // Важно: читаем потоки, чтобы 7-Zip не зависал при большом логе
-        var output = Read7zProgressAsync(proc.StandardOutput, 0, 15, "Распаковка ISO");
-        var error = await proc.StandardError.ReadToEndAsync();
+        // ВАЖНО: читаем ОБА потока параллельно и ЖДЁМ их завершения
+        var readOut = Read7zProgressAsync(proc.StandardOutput, 0, 15, "Распаковка ISO");
+        var readErr = proc.StandardError.ReadToEndAsync();
+
+        await Task.WhenAll(readOut, readErr);
         await proc.WaitForExitAsync();
 
+        string error = await readErr;
         if (!string.IsNullOrEmpty(error)) Log(error);
 
         return proc.ExitCode == 0;
@@ -485,24 +593,65 @@ public sealed partial class MainWindow : Window
 
     private async Task Read7zProgressAsync(StreamReader reader, int startProgress, int endProgress, string stageName)
     {
-        string? line;
-        while ((line = await reader.ReadLineAsync()) != null)
+        var buffer = new StringBuilder();
+        var chunk = new char[1024];
+
+        while (true)
+        {
+            int n = await reader.ReadAsync(chunk, 0, chunk.Length);
+            if (n == 0) break;
+
+            for (int i = 0; i < n; i++)
+            {
+                char c = chunk[i];
+
+                // 7-Zip завершает строки как через \n, так и через \r (для прогресс-бара)
+                if (c == '\r' || c == '\n')
+                {
+                    if (buffer.Length > 0)
+                    {
+                        Process7zLine(buffer.ToString(), startProgress, endProgress, stageName);
+                        buffer.Clear();
+                    }
+                    continue;
+                }
+
+                buffer.Append(c);
+            }
+        }
+
+        if (buffer.Length > 0)
+            Process7zLine(buffer.ToString(), startProgress, endProgress, stageName);
+    }
+
+    private void Process7zLine(string line, int startProgress, int endProgress, string stageName)
+    {
+        // 1. Отправляем строку в лог (окно "Консоль" и Debug)
+        // Игнорируем пустые строки и мусор
+        if (!string.IsNullOrWhiteSpace(line))
         {
             Log(line);
+        }
 
-            // 7-Zip выводит прогресс в формате " 45%"
-            var match = System.Text.RegularExpressions.Regex.Match(line, @"(\d+)%");
-            if (match.Success && int.TryParse(match.Groups[1].Value, out int percent))
+        // 2. Парсим проценты и обновляем прогресс-бар
+        // 7-Zip выводит прогресс в формате " 45%" или " 45% 12 - file.txt"
+        var match = System.Text.RegularExpressions.Regex.Match(line, @"(\d+)%");
+        if (match.Success && int.TryParse(match.Groups[1].Value, out int percent))
+        {
+            if (percent < 0 || percent > 100) return;
+
+            int overall = startProgress + (int)(percent / 100.0 * (endProgress - startProgress));
+
+            var dq = progressBar.DispatcherQueue;
+            dq?.TryEnqueue(() =>
             {
-                int overall = startProgress + (int)(percent / 100.0 * (endProgress - startProgress));
-
-                DispatcherQueue.TryEnqueue(() =>
+                if (overall > progressBar.Value) // защита от отката
                 {
                     progressBar.Value = overall;
                     lblProgressPercent.Text = $"{overall}%";
                     lblStatus.Text = $"{stageName} ({percent}%)";
-                });
-            }
+                }
+            });
         }
     }
 
