@@ -127,8 +127,18 @@ public sealed partial class MainWindow : Window
         // Задаем ширину и высоту (в логических пикселях)
         appWindow.ResizeClient(new SizeInt32(700, 500));
 
+        // Установка иконки заголовка
+        appWindow.SetIcon("itFlashka.ico");
+
+        // Установка темы заголовка
+        if (AppWindowTitleBar.IsCustomizationSupported())
+        {
+            appWindow.TitleBar.PreferredTheme = TitleBarTheme.Dark;
+        }
+
         _logWindow = new LogWindow(); // Создаем сразу, чтобы лог писался
         _logWindow.Closed += (s, args) => _logWindow = null;
+        this.Closed += (s, e) => Environment.Exit(0);
     }
 
     // Вспомогательный метод для вызова диалога

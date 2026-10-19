@@ -4,7 +4,17 @@
     <DebuggerFlavor>ProjectDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup>
-    <ActiveDebugProfile>IsoSlimmer (Package)</ActiveDebugProfile>
+    <ActiveDebugProfile>IsoSlimmer (Unpackaged)</ActiveDebugProfile>
+    <AppIconSource>C:\Users\olgav\Downloads\itFlashka.png</AppIconSource>
+    <Source>C:\Users\olgav\Downloads\itFlashka.png</Source>
+    <SmallTileSource>C:\Users\olgav\Downloads\itFlashka.png</SmallTileSource>
+    <MediumTileSource>C:\Users\olgav\Downloads\itFlashka.png</MediumTileSource>
+    <WideTileSource>C:\Users\olgav\Downloads\itFlashka.png</WideTileSource>
+    <LargeTileSource>C:\Users\olgav\Downloads\itFlashka.png</LargeTileSource>
+    <SplashScreenSource>C:\Users\olgav\Downloads\itFlashka.png</SplashScreenSource>
+    <PackageLogoSource>C:\Users\olgav\Downloads\itFlashka.png</PackageLogoSource>
+    <BadgeLogoSource>C:\Users\olgav\Downloads\itFlashka.png</BadgeLogoSource>
+    <_LastSelectedProfileId>C:\Users\olgav\source\repos\IsoSlimmer_\Properties\PublishProfiles\win-x64.pubxml</_LastSelectedProfileId>
   </PropertyGroup>
   <ItemGroup>
     <None Update="App.xaml">

@@ -49,6 +49,9 @@ namespace IsoSlimmer
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
             _timer.Tick += (s, e) => FlushBuffer();
             _timer.Start();
+
+            // Останавливаем таймер при закрытии окна
+            this.Closed += (s, e) => _timer.Stop();
         }
 
         public void AppendLog(string text)
